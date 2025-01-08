@@ -1,0 +1,609 @@
+---
+title: "STAT167 Group 11 Final Project: Airline Bookings"
+author: "Amy Lau, Emlyn Zhai, Lindsay Phan, Adelric Low, Brian Uong"
+output:
+  html_document:
+    toc: yes
+  pdf_document:
+    toc: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+## Project Introduction
+The goal of this research project is to analyze an airline booking data set from Kaggle to determine what factors influence airline bookings. Specifically, our objective is to determine which factors passengers value most when purchasing an airline ticket. By identifying these factors, we hope to better understand passengers' decision-making process, which can be valuable for airlines to optimize their services and marketing strategies. Through our analyses, we aim to discover patterns in booking behaviors so that we can see which elements impact the passengers’ decision to book a flight. 
+
+## Research Question
+What factors influence airline booking?
+
+## Additional Research Questions
+
+* Does stay length have any correlation with purchase lead?
+* Does sales channel correlate with purchase lead?
+* Is there any correlation between booking origin and flight route?
+* Does origin of route affect the flight duration?
+* Is trip type correlated with flight day?
+* Does wanting extra baggage/preferred seats/in-flight meals affect airline booking?
+
+## Project Description
+To achieve our goal and answer the research questions, we will perform exploratory data analysis and determine if there is any correlation between the factors in our data set. We will also create two classification models to predict whether an instance is "yes" or "no" for booking_complete. Naive Bayes and Random Forest are suitable for our data set because booking_complete is a binary variable. Random Forest will also allow us to quantify the importance of the variables in our data set and determine which ones are most influential in predicting whether a booking is completed or not. Our models will be evaluated by calculating the classification metrics and performing 10-fold cross-validation for each model. 
+ 
+
+## Dataset
+[Airlines Booking](https://www.kaggle.com/datasets/anandshaw2001/airlines-booking-csv)
+```{r, include =FALSE}
+# use path for customer_booking file 
+bookings <- read.csv("C:/Users/Amy/Desktop/stat167/archive/customer_booking.csv")
+bookings
+```
+
+```{r}
+# install.packages("e1071", dep = TRUE)
+# libraries
+# install.packages("randomForest")
+library(reshape2)
+library(ggplot2)
+library(tidyverse)
+library(pROC)
+library(tidyr)
+library(dplyr)
+library(airportr)
+library(maps)
+library(gridExtra)
+library(ggdendro)
+library(vcd)
+library(e1071)
+library(randomForest)
+library(boot)
+library(caret)
+```
+
+## Data Exploration and Visualization
+### Number of Passengers vs. Purchase Lead Time
+```{r, echo = FALSE}
+ggplot(data = bookings, aes(x = reorder(factor(num_passengers), purchase_lead, median), y = purchase_lead)) +
+  geom_boxplot(fill = "plum") +
+  labs(title = "Number of Passengers vs. Purchase Lead Time",
+       x = "Number of Passengers",
+       y = "Purchase Lead Time (days)")
+```
+
+From the box plot above, we are comparing the number of passengers vs purchase lead time. We can see from the median of these box plots that a group of 5 passengers has a longer lead time on average. In comparison, we can also see that the lead time is the shortest when there is just one passenger traveling alone.
+
+### Bookings By Flight Hour, Sales Channel, and Booking Status
+```{r, echo = FALSE}
+num_bookings <- bookings |>
+  filter(booking_complete == 1) |>
+  group_by(sales_channel) |>
+  summarize(num_bookings = n())
+
+# Filter the data to include only complete bookings
+complete_bookings <- bookings |>
+  filter(booking_complete == 1)
+
+# Create the plot
+ggplot(bookings, aes(x = factor(flight_hour), fill = factor(booking_complete))) +
+  geom_bar(position = "stack") +
+  facet_wrap(~ sales_channel, nrow = 3) +
+  labs(x = "Flight Hour",
+       y = "Count",
+       fill = "Booking Status",
+       title = "Bookings by Flight Hour, Sales Channel, and Booking Status") +
+  scale_fill_manual(values = c("0" = "steelblue", "1" = "maroon"))
+```
+
+For this bar graph, we compared the amount of bookings made for different flight hours across various sales channels. The internet channel is more popular in general, especially in the morning. Peak booking hours for the internet graph are from 7am to 1pm. Bookings at around 9 am had the highest volume sold and the largest amount of not completed bookings being around 8 am. Since the graphs are more right-skewed, we can assume that majority of people tend to book their flights in the morning rather than at night. We can see that passengers prefer to use the Internet over mobile to book their flights since the mobile graph has fewer bookings than the Internet graph.
+
+### Bookings vs. Hour of Flight Departure
+```{r, echo = FALSE}
+# aggregate the data to count the number of bookings for each hour
+booking_counts_hour <- bookings |>
+  filter(booking_complete == 1) |>
+  group_by(flight_hour) |>
+  summarise(bookings = n())
+
+# plot bookings over hours with a smooth line
+ggplot(booking_counts_hour, aes(x = flight_hour, y = bookings)) +
+  geom_point(size = 3) +  # Add points
+  geom_smooth(method = "loess", color = "blue", se = FALSE) +  # add smooth line
+  labs(x = "Hour of Flight Departure", y = "Number of Bookings", title = "Bookings vs. Hour of Flight Departure") +
+  theme_minimal()
+```
+In the figure above, we have a scatter plot of the number of completed bookings vs the hour of flight departure. There is a clear trend in the number of completed bookings, with the majority of them being before 3pm. After 3pm, the number of completed bookings decreases as the hour of flight departure becomes later in the day.
+
+### Complete Bookings by Customer Preference Combination
+```{r, echo = FALSE}
+# create a new variable for combinations of preferences
+preferences_df<- bookings |>
+  filter(booking_complete == 1) |>
+  mutate(booking_combination = case_when(
+    wants_extra_baggage == 1 & wants_preferred_seat == 1 & wants_in_flight_meals == 1 ~ "All",
+    wants_extra_baggage == 1 & wants_preferred_seat == 1 ~ "Extra Baggage & Preferred Seat",
+    wants_extra_baggage == 1 & wants_in_flight_meals == 1 ~ "Extra Baggage & In-flight Meals",
+    wants_preferred_seat == 1 & wants_in_flight_meals == 1 ~ "Preferred Seat & In-flight Meals",
+    wants_extra_baggage == 1 ~ "Extra Baggage Only",
+    wants_preferred_seat == 1 ~ "Preferred Seat Only",
+    wants_in_flight_meals == 1 ~ "In-flight Meals Only",
+    TRUE ~ "None"
+  )) |>
+  group_by(booking_combination) |>
+  summarise(total_sales = n()) |>
+  arrange(desc(total_sales))
+
+# create a bar plot of sales for combinations of preferences
+ggplot(preferences_df, aes(x = reorder(booking_combination, desc(total_sales)), y = total_sales)) +
+  geom_bar(stat = "identity", fill = "lightblue") +
+  labs(x = "Booking Combination", y = "Number of Complete Bookings", title = "Complete Bookings by Customer Preference Combination") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+The bar graph above shows the number of complete bookings by customer preference combinations. Having extra baggage only has the highest number of completed bookings, followed by having all three of extra baggage, preferred seats, and in flight meals. 
+
+### Flight Routes
+```{r, echo = TRUE}
+route <- data.frame(ogRoute = unique(bookings$route))
+routeOrigin <- mutate(route, origin = substr(route$ogRoute, start = 1, stop = 3))
+routeDest <- mutate(route, dest = substr(route$ogRoute, start = 4, stop = 6))
+
+mergedOrigin <- merge(x = airports[, c("IATA", "Latitude", "Longitude", "Country")], y = routeOrigin, by.x = "IATA", by.y = "origin")
+mergedDest <- merge(x = airports[, c("IATA","Latitude", "Longitude", "Country")], y = routeDest, by.x = "IATA", by.y = "dest")
+
+colnames(mergedOrigin)[1] <- "origin"
+colnames(mergedOrigin)[2] <- "originLat"
+colnames(mergedOrigin)[3] <- "originLon"
+colnames(mergedOrigin)[4] <- "originCountry"
+colnames(mergedDest)[1] <- "dest"
+colnames(mergedDest)[2] <- "destLat"
+colnames(mergedDest)[3] <- "destLon"
+colnames(mergedDest)[4] <- "destCountry"
+
+mergedRoute <- merge(mergedOrigin, mergedDest)
+mergedAll <- merge(mergedRoute[, c("ogRoute", "originLat", "originLon", "destLat", "destLon", "originCountry", "destCountry")], bookings, by.x = "ogRoute", by.y = "route")
+
+world_map <- map_data("world")
+ggplot(data = world_map) + geom_polygon(aes(x = long, y = lat, group = group), fill = "white", color = "black") + geom_curve(data = mergedAll, aes(x =originLon, y = originLat, xend = destLon, yend = destLat, color = trip_type, linetype = trip_type)) +
+   labs(title = "Flight Routes") +
+  coord_quickmap(xlim = c(-25.0, 193.0), ylim = c(-56.0, 78.0))
+```
+The dataset had the origin and destination airports in an OriginDestination format, so we first had to create two new columns, origin and destination, that only contained either origin or destination. After that, using an airports package called ‘airportr’, we matched up each origin and destination to its longitude, latitude, and country. Because the dataset was large, we created a new dataframe that only contained the unique origin and destination values, and performed those steps on that new dataframe. Otherwise, the operation would’ve taken too long to complete. And with that new dataframe, we were able to use the longitude and latitude values of each origin and destination airport in a geom_curve() operation to show the flight routes on a map.
+
+### Destination Country Frequency
+```{r, echo = FALSE}
+ggplot(data = mergedAll, mapping = aes(x = destCountry)) + geom_bar() + theme(axis.text.x = element_text(angle = 90)) + labs(x = "Destination Country", title = "Destination Country Frequency")
+```
+We also then merged the new dataframe with the original dataset by matching them up through the OriginDestination routes, and used the destination countries in a histogram to show the  most popular destination countries from the dataset.
+
+### Correlation Heat Map of Numerical Variables
+```{r, echo = FALSE}
+numeric_columns <- bookings |>
+  select_if(is.numeric)
+
+corr_mat <- round(cor(numeric_columns),2)
+melted_corr_mat <- melt(corr_mat)
+ggplot(data = melted_corr_mat, aes(x=Var1, y=Var2,
+                                   fill=value)) + 
+geom_tile() + 
+  scale_fill_gradient(low = "white", high = "blue") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) + 
+  ggtitle("Correlation Heatmap for Numerical Variables")
+```
+
+### Correlation Heat Map of Categorical Variables
+```{r, echo = FALSE}
+# define the categorical variables
+categorical_vars <- c("trip_type", "flight_day", "route", "booking_origin", "booking_complete")
+
+# function to calculate Cramer's V for a pair of categorical variables
+calculate_cramer_v <- function(var1, var2) {
+  assocstats(table(bookings[[var1]], bookings[[var2]]))$cramer
+}
+
+# initialize an empty matrix to store Cramer's V values
+cramer_v_matrix <- matrix(NA, nrow = length(categorical_vars), ncol = length(categorical_vars),
+                          dimnames = list(categorical_vars, categorical_vars))
+
+# calculate Cramer's V for each pair of categorical variables
+for (i in 1:length(categorical_vars)) {
+  for (j in 1:length(categorical_vars)) {
+    cramer_v_matrix[i, j] <- calculate_cramer_v(categorical_vars[i], categorical_vars[j])
+  }
+}
+
+# plot heatmap
+library(ggplot2)
+ggplot(data = as.data.frame.table(cramer_v_matrix), aes(x = Var1, y = Var2, fill = Freq)) +
+  geom_tile() +
+  scale_fill_gradient(low = "lavender", high = "purple4") +
+  theme_minimal() +
+  labs(title = "Correlation Heat Map for Categorical Variables")
+```
+
+Based on the output of the two heatmaps above for correlation between numerical and categorical variables, there is no strong correlation between the variables and booking_complete. However, the heatmap for categorical variables illustrates a slight correlation between booking_complete and route. Due to this revelation, we will be observing this variable to see if there is a true relationship with booking_complete. We also noticed that some variables have a very small correlation with each other. For instance, the heatmap for numerical variables shows a slight correlation between wants_in_flight_meals and wants_perferred seat. 
+
+### Completed Bookings By Destination
+```{r, echo = TRUE}
+# get complete bookings by destination
+completed_bookings_by_dest <- bookings |>
+  # create new row for destination
+  mutate(dest = substr(route, nchar(route) - 2, nchar(route))) |>
+  filter(booking_complete == 1) |>
+  group_by(dest) |>
+  summarize(total_completed_bookings = n())
+
+# get airport subset of IATA, lat, long, and country
+airports_subset <- airports %>%
+  select(IATA, Latitude, Longitude, Country)
+
+# merge the completed_bookings_by_dest with airports_subset
+merged_data <- completed_bookings_by_dest %>%
+  left_join(airports_subset, by = c("dest" = "IATA"))
+
+# check for any missing values and remove them
+merged_data <- merged_data %>%
+  filter(!is.na(Latitude) & !is.na(Longitude))
+
+head(merged_data)
+
+# get world map
+world_map <- map_data("world")
+
+# plot the world map 
+ggplot(data = world_map) +
+  geom_polygon(aes(x = long, y = lat, group = group), fill = "white", color = "black") +
+  # plot points for booking destinations, setting size and color to total completed bookings
+  geom_point(data = merged_data, aes(x = Longitude, y = Latitude, size = total_completed_bookings, color = total_completed_bookings), alpha = 0.7) +
+  scale_size_continuous(range = c(1, 10)) + 
+  # add title
+  ggtitle("Completed Bookings by Destination") +
+  # set limits for better visualization
+  coord_quickmap(xlim = c(-25.0, 193.0), ylim = c(-56.0, 78.0))
+```
+The map above we have plotted points with color and size based on the total number of completed bookings for a given destination. The larger the size and the lighter the color of the point, the more total bookings there are. We can see in the map that there are more completed bookings in Australia and Southeast Asia.
+
+## Classification Models
+Since the data set is very large and is made up of a majority of "no" instances for booking_complete, we decided to use under sampling so that the classification models can be trained on a more balanced data set. We counted the number of completed bookings in the data, and sampled an equal number of instances where the booking was not completed.
+
+### Under Sampled Data
+```{r, echo = TRUE}
+# set the seed
+set.seed(167)
+
+# count number of yes and no for booking complete
+num_yes <- sum(bookings$booking_complete == 1)
+num_no <- sum(bookings$booking_complete == 0)
+
+# define the number of samples to be taken from each class
+n_samples <- num_yes  # Adjust this number based on your dataset
+
+# sample indices for "yes" bookings
+yes_indices <- sample(which(bookings$booking_complete == 1), n_samples)
+
+# sample indices for "no" bookings
+no_indices <- sample(which(bookings$booking_complete == 0), n_samples)
+
+# combine the sampled indices
+sampled_indices <- c(yes_indices, no_indices)
+
+# create the sampled data set
+undersampled_data <- bookings[sampled_indices, ]
+```
+### Naive Bayes
+```{r, echo = TRUE}
+# mutate the data to change the categorical variables to factors
+new_bookings <- undersampled_data |>
+  mutate(
+  sales_channel = as.factor(sales_channel),
+  trip_type = as.factor(trip_type),
+  flight_day = as.factor(flight_day),
+  route = as.factor(route),
+  booking_origin = as.factor(booking_origin)
+)
+
+# set the seed
+set.seed(167)
+
+# split the data into training and test sets
+train_indices <- sample(seq_len(nrow(new_bookings)), size = 0.7 * nrow(new_bookings))
+train_data <- new_bookings[train_indices, ]
+test_data <- new_bookings[-train_indices, ]
+
+# train the naive bayes model
+model <- naiveBayes(booking_complete ~ ., data = train_data)
+
+# predict on the test set
+predictions <- predict(model, test_data)
+```
+### Naive Bayes Model Evaluation
+```{r, echo = FALSE}
+# create a confusion matrix to evaluate the model
+confusion_matrix <- table(predictions, test_data$booking_complete)
+confusion_matrix
+
+# calculate accuracy
+accuracy <- sum(diag(confusion_matrix)) / sum(confusion_matrix)
+cat("Accuracy:", accuracy, "\n")
+
+sensitivity <- 1685 / (1685 + 745)
+cat("Sensitivity: ", sensitivity, "\n")
+
+specificity <- 1476 / (1476 + 581)
+cat("Specificity: ", specificity, "\n")
+```
+Sensitivity: The proportion of of actual positive cases (booking completions) that are correctly identified by our model. It measures the model’s ability to correctly detect TP. In our case we had a sensitivity of 35.98% indicating that the model correctly identifies roughly36% of actual booking completions. This then suggests that the model misses a significant number of actual completions.
+Specificity: The proportion of actual negative cases (non-booking completions) that are correctly identified by our model. It measures the model’s ability to correct detect TN. In our case we had a specificity of 87.85% indicating that the model correctly identifies about 88% of actual non-booking completions. This suggests that the model is quite good at recognizing when a booking is not completed.
+
+```{r, echo = FALSE}
+# predicted probabilities for the test set
+pred_probs <- predict(model, test_data, type = "raw")[,2]
+
+# ROC curve object
+roc_curve <- roc(test_data$booking_complete, pred_probs)
+
+# Area Under Curve
+auc_value <- auc(roc_curve)
+
+# plot ROC curve
+plot(roc_curve, main = paste("ROC Curve for Naive Bayes (AUC =", round(auc_value, 2), ")"))
+```
+We created an ROC curve to evaluate the classifier's performance. The area under the curve is about 75%, which means that the model has a 75% chance of correctly distinguishing between non-completed bookings and completed bookings. Overall, we can say that the model can distinguish between positive and negative instances pretty well. 
+
+
+### Random Forest
+```{r, echo = TRUE}
+# convert relevant columns to factors
+rf_df <- undersampled_data |>
+  mutate(
+    sales_channel = as.factor(sales_channel),
+    trip_type = as.factor(trip_type),
+    route = as.factor(route),
+    booking_origin = as.factor(booking_origin),
+    wants_extra_baggage = as.factor(wants_extra_baggage),
+    wants_preferred_seat = as.factor(wants_preferred_seat),
+    wants_in_flight_meals = as.factor(wants_in_flight_meals),
+    booking_complete = as.factor(booking_complete)
+  )
+
+# split data into training and testing sets
+set.seed(167)
+n <- nrow(rf_df)
+
+# randomly sample indices for the training set (70%)
+train.idx <- sample(n, size = n * 0.7)
+
+# create the training and test sets
+train <- rf_df[train.idx, ]
+test <- rf_df[-train.idx, ]
+
+rf_model <- randomForest(booking_complete ~ num_passengers + sales_channel + trip_type + 
+                         purchase_lead + length_of_stay + flight_hour + flight_day + 
+                         wants_extra_baggage + wants_preferred_seat + 
+                         wants_in_flight_meals + flight_duration, 
+                         data = train, ntree = 500, mtry = 3, importance = TRUE)
+
+# Make predictions on the test data
+rf_predicted_classes <- predict(rf_model, newdata = test)
+```
+
+```{r, echo = TRUE}
+# # Calculate misclassification rate
+# misclassification_rate <- mean(rf_predicted_classes != test$booking_complete)
+# # print(paste("Misclassification rate:", misclassification_rate))
+# cat("Misclassification rate:", misclassification_rate, "\n\n")
+
+# Create a confusion matrix
+confusion_matrix <- table(Actual = test$booking_complete, Predicted = rf_predicted_classes)
+print("Confusion Matrix:")
+print(confusion_matrix)
+
+# Calculate accuracy
+accuracy <- sum(diag(confusion_matrix)) / sum(confusion_matrix)
+cat("Accuracy:", accuracy, "\n")
+
+sensitivity <- confusion_matrix[2, 2] / sum(confusion_matrix[2, ])
+specificity <- confusion_matrix[1, 1] / sum(confusion_matrix[1, ])
+
+cat("Sensitivity:", sensitivity, "\n")
+cat("Specificity:", specificity, "\n\n")
+
+# Print variable importance
+print("Variable Importance:")
+print(importance(rf_model))
+
+# Plot variable importance
+varImpPlot(rf_model)
+```
+We chose a Random Forest model for our second classification model so that we can see what features are most important for predicting a completed booking. Since it is a non-parametric technique, we don’t have to worry about satisfying assumptions for normality and independence. From the confusion matrix we can see that the model has a sensitivity of 62% and specificity of 63%, with an overall accuracy of 63%. Despite the low sensitivity and specificity, we were still able to gain some insight into what variables were most important for deciding the outcome. In the variable importance plot, we can see that length_of_stay is the most important in maintaining accuracy because it has the highest mean decrease accuracy measurement. In the plot for Mean Decrease Gini, we can see that purchase_lead is the most important in splitting the data to classify whether it is a yes or no. When we consider both metrics of Mean Decrease Accuracy and Mean Decrease Gini, length_of_stay, flight_duration, purchase_lead, flight_hour, and wants_extra_baggage seem to be the top five most important variables.
+
+```{r, echo = FALSE}
+# Make predictions on the test data
+rf_predicted_probs <- predict(rf_model, newdata = test, type = "prob")[, 2]
+
+# ROC Curve and AUC
+roc_curve <- roc(test$booking_complete, rf_predicted_probs, levels = rev(levels(test$booking_complete)))
+auc_value <- auc(roc_curve)
+
+cat("AUC:", auc_value, "\n")
+
+# Plot ROC curve
+plot(roc_curve, main = paste("ROC Curve for Random Forest (AUC =", round(auc_value, 2), ")"))
+```
+For a Random Forest model, the ROC curve helps in understanding how well the model performs across different thresholds, and the AUC provides a single metric that allows us to evaluate its overall performance. Since the Area Under the Curve (AUC) is 0.68, we can conclude that the model has some ability to distinguish between positive and negative instances. However, it is overall not a very good model.    
+
+
+## Model Evaluation
+In addition to classification evaluation metrics, we have also performed 10 Fold Cross Validation to evaluate our models.
+
+### Naive Bayes 10 Fold Cross Validation 
+```{r}
+# set seed
+set.seed(167)
+
+new_bookings$booking_complete <- as.factor(new_bookings$booking_complete)
+
+# Function for manual 10-fold cross-validation to calculate MSE
+cross_validate_naive_bayes_mse <- function(data, k) {
+  folds <- createFolds(data$booking_complete, k = k)
+  mses <- numeric(k)
+  
+  for (i in 1:k) {
+    test_indices <- folds[[i]]
+    train_data <- data[-test_indices, ]
+    test_data <- data[test_indices, ]
+    
+    model <- naiveBayes(booking_complete ~ ., data = train_data)
+    predictions <- predict(model, test_data, type = "raw")  # Get probabilities
+    # Convert probabilities to numeric predictions (0 or 1)
+    numeric_predictions <- as.numeric(predictions[,2] > 0.5)
+    numeric_actual <- as.numeric(test_data$booking_complete) - 1  # Convert factor to numeric
+    
+    mses[i] <- mean((numeric_predictions - numeric_actual)^2)
+  }
+  
+  return(mses)
+}
+
+# Run the cross-validation
+cv_mse <- cross_validate_naive_bayes_mse(new_bookings, k = 10)
+cv.df <- tibble(fold = 1:10, MSE.cv = cv_mse)
+
+ggplot(data = cv.df, mapping = aes(x = fold, y = MSE.cv)) +
+geom_point() + geom_line() + ylab("10-fold CV MSE") +
+  labs(title = "Naive Bayes (Undersampled) 10-fold CV")
+```
+
+
+### Random Forest 10 Fold Cross Validation 
+```{r}
+# Function for manual 10-fold cross-validation to calculate MSE on random forest model
+cross_validate_random_forest_mse <- function(data, k) {
+  folds <- createFolds(data$booking_complete, k = k)
+  mses <- numeric(k)
+  
+  for (i in 1:k) {
+    test_indices <- folds[[i]]
+    train_data <- data[-test_indices, ]
+    test_data <- data[test_indices, ]
+    
+    model <- randomForest(booking_complete ~ num_passengers + sales_channel + trip_type + 
+                         purchase_lead + length_of_stay + flight_hour + flight_day + 
+                         wants_extra_baggage + wants_preferred_seat + 
+                         wants_in_flight_meals + flight_duration, 
+                         data = train_data, ntree = 500, mtry = 3, importance = TRUE)
+    # get predictions
+    predictions <- predict(model, test_data)  # Get class predictions
+    
+    # convert factor to numeric
+    numeric_predictions <- as.numeric(predictions) - 1  
+    numeric_actual <- as.numeric(test_data$booking_complete) - 1  
+    
+    mses[i] <- mean((numeric_predictions - numeric_actual)^2)
+  }
+  
+  return(mses)
+}
+
+# Run the cross-validation
+set.seed(167)  # For reproducibility
+cv_mse <- cross_validate_random_forest_mse(rf_df, k = 10)
+cv.df <- tibble(fold = 1:10, MSE.cv = cv_mse)
+
+ggplot(data = cv.df, mapping = aes(x = fold, y = MSE.cv)) +
+geom_point() + geom_line() + ylab("10-fold CV MSE") +
+    labs(title = "Random Forest (Undersampled) 10-fold CV")
+```
+For the Naive Bayes, the 10-fold cross validation ended up increasing the average MSE per fold, however, it reduced the problem prior to undersampling where the last 2 folds tended to have much higher MSEs due to data with low instances of bookings completed. Furthermore, comparing the two under sampled models directly we were able to see that the Naive Bayes had lower MSEs than the random forest model leading us to believe that it was the better model in terms of predicting whether bookings would be completed or not. This cross-validation also showed that there were certain areas of the data that definitely performed better which we believe is once again due to the fact that there weren’t many instances of bookings being completed in the data set as a whole. 
+
+## Limitations
+
+### Model Attempts
+```{r, echo = FALSE}
+# split data into training and testing sets
+set.seed(167)
+existingBookings <- na.omit(bookings) %>% select(purchase_lead, length_of_stay)
+n <- nrow(existingBookings)
+
+# randomly sample indices for the training set (50%)
+train.idx <- sample(n, n / 2)
+
+
+# create the training and test sets
+train <- existingBookings[train.idx, ]
+test <- existingBookings[-train.idx, ]
+
+# determining num clusters
+res <- c()
+iList <- c(1:15)
+for (i in iList) {
+  res[i] <- kmeans(train, centers = i, nstart = 20)$tot.withinss
+}
+
+plot(iList, res)
+
+# result is not useful
+result <- kmeans(train, centers = 2, nstart = 20)
+
+plot(train[,1:2], col = result$cluster)
+```
+
+The dataset had the origin and destination airports in an OriginDestination format, so we first had to create two new columns, origin, and destination, that only contained either origin or destination. After that, using an airports package called ‘airportr’, we matched each origin and destination to its longitude, latitude, and country. Because the dataset was large, we created a new data frame that only contained the unique origin and destination values and performed those steps on that new data frame. Otherwise, the operation would’ve taken too long to complete. With that new data frame, we were able to use the longitude and latitude values of each origin and destination airport in a geom_curve() operation to show the flight routes on a map. We then merged the new data frame with the original dataset by matching them up through the OriginDestination routes and used the destination countries in a histogram to show the most popular destination countries from the dataset.
+
+
+## Conclusion
+In conclusion, we were able to achieve our project goal of determining what factors influence an airline booking. Although the exploratory data analysis showed some trends in our data, the correlation heat maps showed that there was no significant correlation between the variables and an airline booking, as well as no correlation between the variables themselves. Before creating our classification models, we had to undersample the data to create a more balanced training and test set with equal "yes" and "no" instances for booking_complete. For our models, Naive Bayes with under-sampling had a relatively high sensitivity of 0.69 and a relatively low specificity of 0.72. Random Forest with under-sampling had a sensitivity of 0.62 and a specificity of 0.63. Although both models did not perform very well, when we compared the two directly using classification metrics and the 10-fold cross-validation, we found that the Naive Bayes model proved to be better. However, based on the variable importance metrics from the Random Forest Model, we were also able to determine that passengers value the following factors the most: length_of_stay flight_duration, purchase_lead, flight_hour, and wants_extra_baggage. There were some limitations to our project due to the fact that there are many fewer instances of people completing a booking than not completing a booking in our data set. Despite this, we were still able to identify factors and trends that influenced people to complete bookings.
+
+
+
+## Authors Contributions
+
+### Project Intro/Description
+
+ * Brian
+
+### EDA
+
+ * Lindsay
+   * Number of Passengers vs. Purchase Lead Time
+   * Bookings By Flight Hour, Sales Channel, and Booking Status
+   * Correlation Heat Map of Categorical Variables
+  
+ * Amy
+   * Bookings vs. Hour of Flight Departure
+   * Complete Bookings by Customer Preference Combination
+   * Completed Bookings By Destination
+  
+ * Emlyn
+   * Flight Routes
+   * Destination Country Frequency
+  
+ * Adelric
+   * Correlation Heat Map of Numerical Variables
+
+### Models
+
+ * Lindsay (Naive Bayes)
+ * Amy (Random Forest)
+
+### Classification Evaluation for Models
+
+ * Lindsay (Naive Bayes confusion matrix)
+ * Amy (Random Forest confusion matrix)
+ * Brian (sensitivity, specificity, ROC curve)
+
+### Model Evaluation with 10 fold CV 
+
+ * Adelric
+   * Naive Bayes
+   * Random Forest
+
+### Limitations
+
+ * Emlyn
+
+### Conclusion
+ * Adelric
+
+## Data/Code Availability
+Link to Kaggle dataset: [Airlines Booking](https://www.kaggle.com/datasets/anandshaw2001/airlines-booking-csv)
+Link to Google Drive: [STAT167 Group 11 Final Project Google Drive] (https://drive.google.com/drive/folders/1fI4_bw7bWNu-Ppzi-fGRair9oh38WO13?usp=sharing) 
