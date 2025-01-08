@@ -29,6 +29,5 @@ themselves. Before creating our classification models, we had to undersample the
 `booking_complete`. For our models, Naive Bayes with under-sampling had a relatively high sensitivity of 0.69 and a relatively low specificity of 0.72. Random Forest with 
 under-sampling had a sensitivity of 0.62 and a specificity of 0.63. Although both models did not perform very well, when we compared the two directly using classification metrics 
 and the 10-fold cross-validation, we found that the Naive Bayes model proved to be better. However, based on the variable importance metrics from the Random Forest Model, we were 
-also able to determine that passengers value the following factors the most: length_of_stay flight_duration, purchase_lead, flight_hour, and wants_extra_baggage. There were some 
-limitations to our project due to the fact that there are many fewer instances of people completing a booking than not completing a booking in our data set. Despite this, we were 
+also able to determine that passengers value the following factors the most: `length_of_stay`, `flight_duration`, `purchase_lead`, `flight_hour`, and `wants_extra_baggage`. There were some limitations to our project due to the fact that there are many fewer instances of people completing a booking than not completing a booking in our data set. Despite this, we were 
 still able to identify factors and trends that influenced people to complete bookings.
